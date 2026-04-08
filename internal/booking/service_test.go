@@ -10,7 +10,7 @@ import (
 )
 
 func TestCincurrentBooking_ExactlyOneWins(t *testing.T) {
-	store := RedisStore(redis.NewClient("localhost:6379"))
+	store := NewRedisStore(redis.NewClient("localhost:6379"))
 	svc := NewService(store)
 
 	const numGoroutines = 100_000
