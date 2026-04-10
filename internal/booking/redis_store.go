@@ -32,19 +32,39 @@ func sessionKey(id string) string {
 	return fmt.Sprintf("session:%s", id)
 }
 
-func (s *RedisStore) Book(b Booking) error {
+func (s *RedisStore) Book(b Booking) (Booking, error) {
 	session, err := s.hold(b)
 	if err != nil {
-		return err
+		return Booking{}, err
 	}
 
 	log.Printf("Session booked %v", session)
 
-	return nil
+	return session, nil
 }
 
 func (s *RedisStore) ListBookings(movieID string) []Booking {
-	return []Booking{}
+	pattern := fmt.Sprintf("seat:%s:*", movieID)
+	var sessions []Booking
+
+	ctx := context.Background()
+
+	iter := s.rdb.Scan(ctx, 0, pattern, 0).Iterator()
+	for iter.Next(ctx) {
+		val, err := s.rdb.Get(ctx, iter.Val()).Result()
+		if err != nil {
+			continue
+		}
+
+		session, err := parseSession(val)
+		if err != nil {
+			continue
+		}
+
+		sessions = append(sessions, session)
+	}
+
+	return sessions
 }
 
 func (s *RedisStore) hold(b Booking) (Booking, error) {
@@ -75,5 +95,68 @@ func (s *RedisStore) hold(b Booking) (Booking, error) {
 		UserID:    b.UserID,
 		Status:    "held",
 		ExpiresAt: now.Add(defaultToHoldTTL),
+	}, nil
+}
+
+func (s *RedisStore) Confirm(ctx context.Context, sessionID string, userID string) (Booking, error) {
+	session, sk, err := s.getSession(ctx, sessionID)
+	if err != nil {
+		return Booking{}, err
+	}
+
+	s.rdb.Persist(ctx, sk)
+	s.rdb.Persist(ctx, sessionKey(sessionID))
+
+	session.Status = "confirmed"
+
+	val, _ := json.Marshal(session)
+	s.rdb.Set(ctx, sk, val, 0)
+
+	return session, nil
+}
+
+func (s *RedisStore) Release(ctx context.Context, sessionID string, userID string) error {
+
+	_, sk, err := s.getSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+
+	s.rdb.Del(ctx, sk, sessionKey(sessionID))
+
+	return nil
+}
+
+func (s *RedisStore) getSession(ctx context.Context, sessionID string) (Booking, string, error) {
+	sk, err := s.rdb.Get(ctx, sessionKey(sessionID)).Result()
+	if err != nil {
+		return Booking{}, "", err
+	}
+
+	val, err := s.rdb.Get(ctx, sk).Result()
+	if err != nil {
+		return Booking{}, "", err
+	}
+
+	session, err := parseSession(val)
+	if err != nil {
+		return Booking{}, "", err
+	}
+
+	return session, sk, nil
+}
+
+func parseSession(val string) (Booking, error) {
+	var data Booking
+	if err := json.Unmarshal([]byte(val), &data); err != nil {
+		return Booking{}, err
+	}
+
+	return Booking{
+		ID:      data.ID,
+		MovieID: data.MovieID,
+		SeatID:  data.SeatID,
+		UserID:  data.SeatID,
+		Status:  data.Status,
 	}, nil
 }

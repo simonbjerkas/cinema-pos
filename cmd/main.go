@@ -1,5 +1,30 @@
 package main
 
-func main() {
+import (
+	"log"
+	"net/http"
 
+	"github.com/simonbjerkas/cinema-pos/internal/adapters/redis"
+	"github.com/simonbjerkas/cinema-pos/internal/booking"
+)
+
+func main() {
+	mux := http.NewServeMux()
+
+	store := booking.NewRedisStore(redis.NewClient("localhost:6379"))
+	svc := booking.NewService(store)
+
+	bookingHandler := booking.NewHandler(svc)
+
+	mux.HandleFunc("GET /movies", bookingHandler.ListMovies)
+	mux.HandleFunc("GET /movies/{movieID}/seats", bookingHandler.ListSeats)
+	mux.HandleFunc("POST /movies/{movieID}/seats/{seatID}/hold", bookingHandler.HoldSeat)
+	mux.HandleFunc("PUT /sessions/{sessionID}/confirm", bookingHandler.ConfirmSession)
+	mux.HandleFunc("DELETE /sessions/{sessionID}", bookingHandler.ReleaseSession)
+
+	mux.Handle("GET /", http.FileServer(http.Dir("static")))
+
+	if err := http.ListenAndServe(":8080", mux); err != nil {
+		log.Fatal(err)
+	}
 }
